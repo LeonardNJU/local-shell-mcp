@@ -6,7 +6,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   validate:
@@ -126,19 +126,21 @@ jobs:
           python scripts/ui-smoke.py > /tmp/ui-smoke.log 2>&1
           echo $? > /tmp/ui-smoke.status
           exit 0
-      - name: Export clean final tree
+      - name: Publish validated clean commit
         run: |
+          test "$(cat /tmp/pytest.status)" = "0"
+          test "$(cat /tmp/ui-smoke.status)" = "0"
           rm .github/workflows/debug-pr94-pytest.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git write-tree > /tmp/final-tree-sha.txt
+          git commit -m "fix(ui): preserve legacy contracts and terminal fallbacks"
+          git push --force origin HEAD:debug/pr94-validated
           mkdir -p diagnostics
-          cp /tmp/pytest.log /tmp/ui-smoke.log /tmp/final-tree-sha.txt diagnostics/
+          git rev-parse HEAD > diagnostics/validated-commit-sha.txt
+          cp /tmp/pytest.log /tmp/ui-smoke.log diagnostics/
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: pr94-validation
           path: diagnostics
-      - name: Require successful validation
-        run: |
-          test "$(cat /tmp/pytest.status)" = "0"
-          test "$(cat /tmp/ui-smoke.status)" = "0"
