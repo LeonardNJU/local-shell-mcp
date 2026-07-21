@@ -1,9 +1,9 @@
 name: Debug PR94 pytest
 
 on:
-  push:
+  pull_request:
     branches:
-      - debug/pr94-pytest
+      - main
 
 permissions:
   contents: read
