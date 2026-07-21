@@ -1,0 +1,37 @@
+name: Debug PR94 conflicts
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: debug/pr94-conflicts
+          fetch-depth: 0
+      - name: Attempt upstream merge
+        run: |
+          git remote add upstream https://github.com/fwerkor/local-shell-mcp.git
+          git fetch upstream main
+          git config merge.conflictstyle diff3
+          git merge --no-commit --no-ff upstream/main || true
+          mkdir -p diagnostics/conflicts
+          git status --short > diagnostics/status.txt
+          git diff --name-only --diff-filter=U > diagnostics/conflict-files.txt
+          git diff --cc > diagnostics/conflicts.diff
+          while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            mkdir -p "diagnostics/conflicts/$(dirname "$file")"
+            cp "$file" "diagnostics/conflicts/$file"
+          done < diagnostics/conflict-files.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pr94-conflicts
+          path: diagnostics
