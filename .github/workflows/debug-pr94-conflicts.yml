@@ -6,37 +6,89 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  inspect:
+  resolve-and-validate:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: debug/pr94-conflicts
+          ref: feat/native-webui
           fetch-depth: 0
-      - name: Attempt upstream merge
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - name: Merge upstream and resolve UI conflicts semantically
         run: |
+          set -euxo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/fwerkor/local-shell-mcp.git
           git fetch upstream main
-          git config merge.conflictstyle diff3
-          mkdir -p diagnostics/conflicts
           set +e
-          git merge --no-commit --no-ff upstream/main > diagnostics/merge.log 2>&1
-          echo $? > diagnostics/merge.status
+          git merge --no-commit --no-ff upstream/main
+          merge_status=$?
           set -e
-          git status --short > diagnostics/status.txt
-          git diff --name-only --diff-filter=U > diagnostics/conflict-files.txt
-          git diff --cc > diagnostics/conflicts.diff
-          while IFS= read -r file; do
-            [ -n "$file" ] || continue
-            mkdir -p "diagnostics/conflicts/$(dirname "$file")"
-            cp "$file" "diagnostics/conflicts/$file"
-          done < diagnostics/conflict-files.txt
+          test "$merge_status" -ne 0
+          actual_conflicts="$(git diff --name-only --diff-filter=U | sort)"
+          expected_conflicts="$(printf '%s\n' \
+            src/local_shell_mcp/ui_static/web.css \
+            src/local_shell_mcp/ui_static/web.js \
+            ui/src/web.css \
+            ui/src/web.ts | sort)"
+          test "$actual_conflicts" = "$expected_conflicts"
+          git checkout --ours -- \
+            ui/src/web.css \
+            ui/src/web.ts \
+            src/local_shell_mcp/ui_static/web.css \
+            src/local_shell_mcp/ui_static/web.js
+          git add \
+            ui/src/web.css \
+            ui/src/web.ts \
+            src/local_shell_mcp/ui_static/web.css \
+            src/local_shell_mcp/ui_static/web.js
+          test -z "$(git diff --name-only --diff-filter=U)"
+          grep -F 'allowTransparency: true' ui/src/web.ts
+          grep -F 'background: "rgba(0, 0, 0, 0)"' ui/src/web.ts
+          grep -F '#terminal .xterm-screen, #terminal .xterm-viewport { background: transparent !important; }' ui/src/web.css
+      - name: Install project and browser runtime
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ripgrep tmux
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+          python -m playwright install --with-deps chromium
+      - name: Test, type-check, and rebuild WebUI/OpenTUI
+        working-directory: ui
+        run: |
+          set -euxo pipefail
+          bun install --frozen-lockfile
+          bun run test
+          bun run typecheck
+          bun run build
+      - name: Run complete Python suite
+        run: pytest -q
+      - name: Run OAuth, PTY, responsive, and transparency browser E2E
+        run: python scripts/ui-smoke.py
+      - name: Commit and publish validated merge
+        run: |
+          set -euxo pipefail
+          git diff --check
+          test -z "$(git grep -l '^<<<<<<<\|^=======\|^>>>>>>>' -- ':!ui/bun.lock' || true)"
+          git add -A
+          git commit -m "merge: reconcile native WebUI with transparency update"
+          git push --force origin HEAD:debug/pr94-resolved
+          mkdir -p diagnostics
+          git rev-parse HEAD > diagnostics/resolved-commit-sha.txt
+          git show --no-patch --pretty=raw HEAD > diagnostics/merge-commit.txt
+          git diff --stat upstream/main...HEAD > diagnostics/pr-stat.txt
       - uses: actions/upload-artifact@v7
+        if: always()
         with:
-          name: pr94-conflicts
+          name: pr94-resolved
           path: diagnostics
